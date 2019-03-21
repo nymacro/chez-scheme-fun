@@ -90,7 +90,9 @@
        (ftype-set! sdl-color-t (r) fptr red)
        (ftype-set! sdl-color-t (g) fptr green)
        (ftype-set! sdl-color-t (b) fptr blue)
-       fptr))))
+       ;; this is a fragile way of passing SDL_Color by value --
+       ;; is there a better way of doing this???
+       (foreign-ref 'unsigned-32 (ftype-pointer-address fptr) 0)))))
 
 (define color-white (literal-color 255 255 255))
 (define color-cyan (literal-color 255 0 255))
@@ -107,10 +109,7 @@
        fptr))))
 
 (define ttf-font (ttf-open-font ttf-font-file 48))
-(define hello-surface (ttf-render-text-blended ttf-font "Hello!"
-                                               (foreign-ref 'unsigned-32
-                                                            (ftype-pointer-address color-cyan)
-                                                            0)))
+(define hello-surface (ttf-render-text-blended ttf-font "Hello!" color-cyan))
 (define empty-rect (make-rect 0 0 0 0))
 
 (define (get-surface-rect surface)
@@ -190,4 +189,3 @@
 ;; (sdl-quit)
 
 (displayln "Goodbye :(")
-(exit)

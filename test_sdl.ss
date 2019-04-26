@@ -2,8 +2,8 @@
 ;;
 ;; ChezScheme SDL FFI test
 ;;
-;; TODO:
-;; * proper cleanup (GC tie-in etc.)
+;; Notes:
+;; * Thunderchez SDL2 FFI bindings do cleanup
 
 (library-directories "~/thunderchez")
 (define ttf-font-file "/usr/local/share/fonts/hack-font/Hack-Bold.ttf")
@@ -27,7 +27,6 @@
     (set! has-init #t)))
 
 (ttf-init)
-
 
 (define (make-frame-limiter frame-max initial-time)
   (let ((last-time initial-time)
@@ -77,11 +76,24 @@
     (lambda (current-time)
       (cons (c current-time) (s current-time)))))
 
+(define make-ftype-guardian (make-guardian))
+(define (make-ftype-guardian-collect)
+  (let loop ()
+    (let ([x (make-ftype-guardian)])
+      (when x
+        (display "freeing ")
+        (display x)(newline)
+        (foreign-free (ftype-pointer-address x))
+        (loop)))))
+
 (define-syntax make-ftype
   (syntax-rules ()
     ((_ type)
-     (make-ftype-pointer type
-                         (foreign-alloc (ftype-sizeof type))))))
+     (let ((ptr (make-ftype-pointer type
+                                    (foreign-alloc (ftype-sizeof type)))))
+       (make-ftype-guardian-collect)
+       (make-ftype-guardian ptr)
+       ptr))))
 
 (define-syntax literal-color
   (syntax-rules ()
@@ -118,11 +130,22 @@
              (1- (ftype-ref sdl-surface-t (w) surface))
              (1- (ftype-ref sdl-surface-t (h) surface))))
 
+;; FIXME thread-safety
+(define make-temp-rect
+  (let ([fptr (make-rect 0 0 0 0)])
+    (lambda (x y w h)
+      (ftype-set! sdl-rect-t (x) fptr x)
+      (ftype-set! sdl-rect-t (y) fptr y)
+      (ftype-set! sdl-rect-t (w) fptr w)
+      (ftype-set! sdl-rect-t (h) fptr h)
+      fptr)))
+
 (let* ((window (sdl-create-window "Hello SDL" 0 0 800 600 0))
        (surface (sdl-get-window-surface window))
        (event (make-ftype sdl-event-t))
        (running #t)
        (surface-rect (get-surface-rect surface))
+       (hello-surface-rect (get-surface-rect hello-surface))
        (current-time (sdl-get-ticks))
        (orbit (make-orbit 200 2000 current-time))
        (waver (make-sine 400 1250 current-time))
@@ -131,8 +154,8 @@
        (frame-rate 0))
 
   (let loop ()
-    (let* ((current-time (sdl-get-ticks))
-           (delay-time (frame-limiter current-time))) 
+    (let* ([current-time (sdl-get-ticks)]
+           [delay-time (frame-limiter current-time)])
       (sdl-delay delay-time)
 
       ;; only display FPS on rate change
@@ -170,13 +193,13 @@
                            (fx/ (ftype-ref sdl-surface-t (w) hello-surface) 2)))
             (y-offset (fx- (fx/ (ftype-ref sdl-surface-t (h) surface) 2)
                            (fx/ (ftype-ref sdl-surface-t (h) hello-surface) 2))))
-        (sdl-upper-blit hello-surface (get-surface-rect hello-surface)
-                        surface (make-rect (fx+ x-offset
-                                                (waver current-time)
-                                                (car pair))
-                                           (fx+ y-offset
-                                                (cdr pair))
-                                           0 0)))
+        (sdl-upper-blit hello-surface hello-surface-rect
+                        surface (make-temp-rect (fx+ x-offset
+                                                     (waver current-time)
+                                                     (car pair))
+                                                (fx+ y-offset
+                                                     (cdr pair))
+                                                0 0)))
 
       ;; flip surface
       (sdl-update-window-surface window)

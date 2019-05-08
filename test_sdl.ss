@@ -1,9 +1,12 @@
-#!/usr/bin/env chez-scheme
+#!/usr/bin/env scheme
 ;;
 ;; ChezScheme SDL FFI test
 ;;
 ;; Notes:
-;; * Thunderchez SDL2 FFI bindings do cleanup
+;; * Requires Chez Scheme 9.5.3+ for foreign pass-by-struct.
+;; * Uses modified Thunderchez SDL2 FFI bindings to use pass-by-struct
+;;   rather than similarly sized integer types. Doing so removes the
+;;   need for any pointer-deref shims.
 
 (library-directories "~/thunderchez")
 (define ttf-font-file "/usr/local/share/fonts/hack-font/Hack-Bold.ttf")
@@ -11,21 +14,17 @@
 (define displayln
   (case-lambda
     ((str port)
-     (display str port)(newline))
+     (display str port)(newline port))
     ((str)
      (display str)(newline))))
 
 (import (sdl2))
 (import (sdl2 ttf))
 (import (chezscheme))
+(import (srfi s48 intermediate-format-strings))
 
-(begin
-  (define has-init #f)
-  (when (not has-init)
-    (sdl-library-init)
-    (sdl-ttf-library-init)
-    (set! has-init #t)))
-
+(sdl-library-init)
+(sdl-ttf-library-init)
 (ttf-init)
 
 (define (make-frame-limiter frame-max initial-time)
@@ -34,7 +33,7 @@
     (lambda (current-time)
       (let ((since (fx- current-time last-time)))
         (set! last-time current-time)
-        (min (fx/ 1000 (max 1 since))
+        (min (fx1- (fx/ 1000 (max 1 since)))
              max-delay)))))
 
 (define (make-frame-counter initial-time)
@@ -102,9 +101,7 @@
        (ftype-set! sdl-color-t (r) fptr red)
        (ftype-set! sdl-color-t (g) fptr green)
        (ftype-set! sdl-color-t (b) fptr blue)
-       ;; this is a fragile way of passing SDL_Color by value --
-       ;; is there a better way of doing this???
-       (foreign-ref 'unsigned-32 (ftype-pointer-address fptr) 0)))))
+       fptr))))
 
 (define color-white (literal-color 255 255 255))
 (define color-cyan (literal-color 255 0 255))
@@ -173,14 +170,35 @@
                ((fx= event-type (sdl-event-type 'quit))
                 (set! running #f))
                ((fx= event-type (sdl-event-type 'mousemotion))
-                (displayln "mouse motion"))
+                (let* ((motion-event (ftype-&ref sdl-event-t (motion) event))
+                       (x (ftype-ref sdl-mouse-motion-event-t (x) motion-event))
+                       (y (ftype-ref sdl-mouse-motion-event-t (y) motion-event)))
+                  (displayln (format "mouse motion: ~a, ~a" x y))))
+               ((fx= event-type (sdl-event-type 'mousebuttondown))
+                (let* ((button-event (ftype-&ref sdl-event-t (button) event))
+                       (button (ftype-ref sdl-mouse-button-event-t (button) button-event)))
+                  (displayln (format "mouse button down: ~a" button))))
+               ((fx= event-type (sdl-event-type 'mousebuttonup))
+                (let* ((button-event (ftype-&ref sdl-event-t (button) event))
+                       (button (ftype-ref sdl-mouse-button-event-t (button) button-event)))
+                  (displayln (format "mouse button up: ~a" button))))
                ((fx= event-type (sdl-event-type 'keydown))
                 (let* ((keyboard-event (ftype-&ref sdl-event-t (key) event))
                        (keysym (ftype-&ref sdl-keyboard-event-t (keysym) keyboard-event))
                        (key-code (ftype-ref sdl-keysym-t (sym) keysym)))
                   (cond
                    ((fx= key-code (sdl-keycode 'escape))
-                    (set! running #f)))))))
+                    (set! running #f))
+                   (else
+                    (displayln (format "Unhandled keycode: ~a"
+                                       (if (< key-code 256)
+                                         (begin
+                                           (let ((key-char (integer->char key-code)))
+                                             (if (or (char-alphabetic? key-char)
+                                                     (char-numeric? key-char))
+                                               key-char
+                                               key-code)))
+                                         key-code)))))))))
             (event-loop))))
 
       ;; redisplay

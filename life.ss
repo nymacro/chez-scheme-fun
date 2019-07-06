@@ -179,6 +179,10 @@
            (value (= 0 (modulo random-value 2))))
       (arena-set! arena x y value))))
 
+(define (arena-clear! arena)
+  (for-arena (x y)
+    (arena-set! arena x y #f)))
+
 (define (arena-render arena surface)
   (for-arena (x y)
     (if (arena-ref arena x y)
@@ -276,11 +280,11 @@
        (event (make-ftype sdl-event-t))
        (frame-rate 0)
        (pause #f)
-       (life-interval (make-interval 200 current-time
+       (life-interval (make-interval 100 current-time
                                           (lambda ()
                                             (unless pause
                                               (set! arena (life-tick arena))))))
-       (redisplay-interval (make-interval 200 current-time
+       (redisplay-interval (make-interval 100 current-time
                                           (lambda ()
                                             (arena-render arena surface)
                                             (sdl-update-window-surface window)))))
@@ -321,6 +325,8 @@
                        (keysym (ftype-&ref sdl-keyboard-event-t (keysym) keyboard-event))
                        (key-code (ftype-ref sdl-keysym-t (sym) keysym)))
                   (cond
+                   ((fx= key-code (sdl-keycode 'c))
+                    (arena-clear! arena))
                    ((fx= key-code (sdl-keycode 'escape))
                     (set! running #f))
                    ((fx= key-code (sdl-keycode 'return))

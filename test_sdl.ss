@@ -1,14 +1,27 @@
 #!/usr/bin/env scheme
-;;
-;; ChezScheme SDL FFI test
-;;
-;; Notes:
-;; * Requires Chez Scheme 9.5.3+ for foreign pass-by-struct.
-;; * Uses modified Thunderchez SDL2 FFI bindings to use pass-by-struct
-;;   rather than similarly sized integer types. Doing so removes the
-;;   need for any pointer-deref shims.
+;;;;
+;;;; ChezScheme SDL FFI test
+;;;;
+;;;; Notes:
+;;;; * Requires Chez Scheme 9.5.3+ for foreign pass-by-struct.
+;;;; * Uses modified Thunderchez SDL2 FFI bindings to use pass-by-struct
+;;;;   rather than similarly sized integer types. Doing so removes the
+;;;;   need for any pointer-deref shims.
 
 (library-directories "~/thunderchez")
+
+(import (sdl2))
+(import (sdl2 ttf))
+(import (sdl2 image))
+(import (chezscheme))
+(import (srfi s48 intermediate-format-strings))
+
+(sdl-library-init)
+(sdl-ttf-library-init)
+(sdl-image-library-init)
+(img-init 0)
+(ttf-init)
+
 (define ttf-font-file "/usr/local/share/fonts/hack-font/Hack-Bold.ttf")
 
 (define displayln
@@ -18,34 +31,28 @@
     ((str)
      (display str)(newline))))
 
-(import (sdl2))
-(import (sdl2 ttf))
-(import (chezscheme))
-(import (srfi s48 intermediate-format-strings))
-
-(sdl-library-init)
-(sdl-ttf-library-init)
-(ttf-init)
-
+;; TODO fix precision of limiting
 (define (make-frame-limiter frame-max initial-time)
   (let ((last-time initial-time)
         (max-delay (fx/ 1000 frame-max)))
     (lambda (current-time)
-      (let ((since (fx- current-time last-time)))
+      (let* ((since (fx- current-time last-time))
+             (delay-time (if (fx<= since 1)
+                           0
+                           (fx/ 1000 since))))
         (set! last-time current-time)
-        (min (fx1- (fx/ 1000 (max 1 since)))
-             max-delay)))))
+        (min delay-time max-delay)))))
 
 (define (make-frame-counter initial-time)
-  (let ((last-time initial-time)
+  (let ((next-time (fx+ initial-time 1000))
         (fps 0)
         (counter 0))
     (lambda (current-time)
       (set! counter (fx1+ counter))
-      (when (fx> current-time (fx+ last-time 1000))
+      (when (fx>= current-time next-time)
         (set! fps counter)
         (set! counter 0)
-        (set! last-time current-time))
+        (set! next-time (fx+ next-time 1000)))
       fps)))
 
 (define (make-circular fn distance span-time init-time)
@@ -117,16 +124,6 @@
        (ftype-set! sdl-rect-t (h) fptr h*)
        fptr))))
 
-(define ttf-font (ttf-open-font ttf-font-file 48))
-(define hello-surface (ttf-render-text-blended ttf-font "Hello!" color-cyan))
-(define empty-rect (make-rect 0 0 0 0))
-
-(define (get-surface-rect surface)
-  (make-rect 0
-             0
-             (1- (ftype-ref sdl-surface-t (w) surface))
-             (1- (ftype-ref sdl-surface-t (h) surface))))
-
 ;; FIXME thread-safety
 (define make-temp-rect
   (let ([fptr (make-rect 0 0 0 0)])
@@ -136,6 +133,15 @@
       (ftype-set! sdl-rect-t (w) fptr w)
       (ftype-set! sdl-rect-t (h) fptr h)
       fptr)))
+
+(define ttf-font (ttf-open-font ttf-font-file 48))
+(define hello-surface (ttf-render-text-blended ttf-font "Hello!" color-cyan))
+
+(define (get-surface-rect surface)
+  (make-rect 0
+             0
+             (1- (ftype-ref sdl-surface-t (w) surface))
+             (1- (ftype-ref sdl-surface-t (h) surface))))
 
 (let* ((window (sdl-create-window "Hello SDL" 0 0 800 600 0))
        (surface (sdl-get-window-surface window))
@@ -158,11 +164,12 @@
       ;; only display FPS on rate change
       (let ((new-frame-rate (frame-counter current-time)))
         (when (not (fx= frame-rate new-frame-rate))
-          (displayln (format "fps: ~a" (frame-counter current-time))))
-        (set! frame-rate new-frame-rate))
+          (displayln (format "fps: ~a" new-frame-rate))
+          (set! frame-rate new-frame-rate)))
 
       (let event-loop ()
         (let ((e (sdl-poll-event event))
+              ;; remove displayln binding for event logging
               (displayln (lambda x #f)))
           (when (> e 0)
             (let ((event-type (ftype-ref sdl-event-t (type) event)))
@@ -230,3 +237,4 @@
 ;; (sdl-quit)
 
 (displayln "Goodbye :(")
+(exit)

@@ -25,6 +25,17 @@
         (action)
         (set! last-time (fx+ last-time interval))))))
 
+(define (make-interval-thread interval action)
+  (let ((mutex (make-mutex)))
+    (cons (fork-thread
+           (lambda ()
+             (let loop ()
+               (sdl-delay interval)
+               (with-mutex mutex
+                 (action))
+               (loop))))
+          mutex)))
+
 (define displayln
   (case-lambda
     ((str port)
@@ -229,14 +240,7 @@
 
 (define (life-tick-inner arena x y)
   (let* ((alive (arena-ref arena x y))
-         (surrounds (arena-surrounds arena x y))
-         (neighbours (fx- (vector-fold (lambda (idx acc val)
-                                         (if val
-                                           (1+ acc)
-                                           acc))
-                                       0
-                                       surrounds)
-                          (if alive 1 0))))
+         (neighbours (arena-surrounds-alive arena x y)))
     (life-tick-state alive neighbours)))
 
 (define (life-tick arena)
@@ -257,6 +261,18 @@
     result)
   (let ((result (make-vector (fx* 3 3) #f)))
     (doit result)))
+
+(define (arena-surrounds-alive arena x y)
+  (let ((alive 0))
+    (for (yy 0 3)
+      (for (xx 0 3)
+        (let* ((get-x (1- (fx+ x xx)))
+               (get-y (1- (fx+ y yy)))
+               (self (and (= get-x x) (= get-y y)))
+               (alivep (arena-ref arena get-x get-y)))
+          (when (and alivep (not self))
+            (set! alive (1+ alive))))))
+    alive))
 
 (define (arena-surrounds-display arena x y)
   (let ((surrounds (arena-surrounds arena x y)))
@@ -284,8 +300,14 @@
                                           (lambda ()
                                             (unless pause
                                               (set! arena (life-tick arena))))))
+       ;; (life-interval (make-interval-thread 100
+       ;;                                      (lambda ()
+       ;;                                        (unless pause
+       ;;                                          (set! arena (life-tick arena))))))
        (redisplay-interval (make-interval 100 current-time
                                           (lambda ()
+                                            ;; (with-mutex (cdr life-interval)
+                                            ;;   (arena-render arena surface))
                                             (arena-render arena surface)
                                             (sdl-update-window-surface window)))))
 

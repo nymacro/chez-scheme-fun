@@ -143,17 +143,14 @@
              (1- (ftype-ref sdl-surface-t (h) surface))))
 
 ;;;; setup
-(define window-width 1024)
-(define window-height 768)
-(define block-width 24)
-(define block-height 24)
+(define window-width 800)
+(define window-height 600)
+(define block-width 8)
+(define block-height 8)
 
-(define (draw-block x y surface)
-  (sdl-fill-rect surface (make-temp-rect x y block-width block-height) (sdl-map-rgb (ftype-ref sdl-surface-t (format) surface) 255 0 0)))
+(define (draw-block x y surface intensity)
+  (sdl-fill-rect surface (make-temp-rect x y block-width block-height) (sdl-map-rgb (ftype-ref sdl-surface-t (format) surface) intensity 0 0)))
   
-(define (draw-empty x y surface)
-  (sdl-fill-rect surface (make-temp-rect x y block-width block-height) (sdl-map-rgb (ftype-ref sdl-surface-t (format) surface) 0 0 0)))
-
 (define arena-width (fx/ window-width block-width))
 (define arena-height (fx/ window-height block-height))
 
@@ -170,6 +167,16 @@
     (fx+ (fx* (fxmodulo yy arena-height) arena-width)
          (fxmodulo xx arena-width))))
 
+(define-syntax life-alive-p
+  (syntax-rules ()
+    ((_ x)
+     (fx= x 255))))
+(define-syntax life-drain
+  (syntax-rules ()
+    ((_ x)
+     (cond
+      ((fx> x 0) (max 0 (fx- x 16)))
+      (else 0)))))
 (define-syntax for-arena
   (syntax-rules ()
     ((for-arena (x y) stmt stmts ...)
@@ -187,7 +194,9 @@
 (define (arena-randomize! arena)
   (for-arena (x y) 
     (let* ((random-value (random 2))
-           (value (= 0 (modulo random-value 2))))
+           (value (if (fx= 0 (modulo random-value 2))
+                    0
+                    255)))
       (arena-set! arena x y value))))
 
 (define (arena-clear! arena)
@@ -196,9 +205,7 @@
 
 (define (arena-render arena surface)
   (for-arena (x y)
-    (if (arena-ref arena x y)
-      (draw-block (fx* block-width x) (fx* block-height y) surface)
-      (draw-empty (fx* block-width x) (fx* block-height y) surface))))
+    (draw-block (fx* block-width x) (fx* block-height y) surface (arena-ref arena x y)))) 
 
 (define (arena-display arena)
   (for (y 0 arena-height)
@@ -208,8 +215,6 @@
         (display ".")))
     (newline)))
 
-(define arena (make-arena))
-
 ;;;; Conway's Game of Life
 ;;;;
 ;;;; Events happen simultaneously
@@ -218,30 +223,28 @@
 ;;;; 3. Alive cells with greater than 3 neighbours die.
 ;;;; 4. Dead cells with exacly three live neighbours comes to life.
 (define (life-tick-state alive neighbours)
-  (cond
-   ((and alive (< neighbours 2)) #f)
-   ((and alive (> neighbours 3)) #f)
-   ((and (not alive) (= neighbours 3)) #t)
-   (else alive)))
-
-(define (vector-fold fn init vec)
-  (define (vector-iterate vec fn)
-    (let ([len (vector-length vec)])
-      (define (do idx)
-        (when (< idx len)
-          (fn idx (vector-ref vec idx))
-          (do (1+ idx))))
-      (do 0)))
-  (let ([result init])
-    (vector-iterate vec
-                    (lambda (idx v)
-                      (set! result (fn idx result v))))
-    result))
+  (let ((alivep (life-alive-p alive)))
+    (cond
+     ((and alivep (< neighbours 2)) (life-drain alive))
+     ((and alivep (> neighbours 3)) (life-drain alive))
+     ((and (not alivep) (= neighbours 3)) 255)
+     (else
+      (if (life-alive-p alive)
+        alive
+        (life-drain alive))))))
 
 (define (life-tick-inner arena x y)
   (let* ((alive (arena-ref arena x y))
          (neighbours (arena-surrounds-alive arena x y)))
     (life-tick-state alive neighbours)))
+
+;; (define other-arena (make-arena))
+;; (define-syntax swap!
+;;   (syntax-rules ()
+;;     ((_ a b)
+;;      (let ([c a])
+;;        (set! a b)
+;;        (set! b c)))))
 
 (define (life-tick arena)
   (let ((new-arena (make-arena)))
@@ -249,19 +252,16 @@
       (arena-set! new-arena x y (life-tick-inner arena x y)))        
     new-arena))
 
-;; return a 3x3 vector of surrounds
-(define (arena-surrounds arena x y)
-  (define (doit result)
-    (for (yy 0 3)
-      (for (xx 0 3)
-        (let ((get-x (1- (fx+ x xx)))
-              (get-y (1- (fx+ y yy))))
-            (vector-set! result (fx+ xx (fx* yy 3))
-                         (arena-ref arena get-x get-y)))))
-    result)
-  (let ((result (make-vector (fx* 3 3) #f)))
-    (doit result)))
+(define (life-tick-pause arena)
+  (let ((new-arena (make-arena)))
+    (for-arena (x y)
+      (let ((alive (arena-ref arena x y)))
+        (arena-set! new-arena x y (if (life-alive-p alive)
+                                    alive
+                                    (life-drain alive)))))
+    new-arena))
 
+;; return number of alive neighbours for a cell
 (define (arena-surrounds-alive arena x y)
   (let ((alive 0))
     (for (yy 0 3)
@@ -269,7 +269,7 @@
         (let* ((get-x (1- (fx+ x xx)))
                (get-y (1- (fx+ y yy)))
                (self (and (= get-x x) (= get-y y)))
-               (alivep (arena-ref arena get-x get-y)))
+               (alivep (life-alive-p (arena-ref arena get-x get-y))))
           (when (and alivep (not self))
             (set! alive (1+ alive))))))
     alive))
@@ -283,32 +283,49 @@
           (display ".")))
       (newline))))
 
+(define arena (make-arena))
 (arena-randomize! arena)
 
 (let* ((window (sdl-create-window "Game of Life" 0 0 window-width window-height 0))
+       (fullscreen #f)
+       (toggle-fullscreen (lambda ()
+                            (set! fullscreen (not fullscreen))
+                            (sdl-set-window-fullscreen window (if fullscreen 1 0))))
        (surface (sdl-get-window-surface window))
        (event (make-ftype sdl-event-t))
        (running #t)
        (surface-rect (get-surface-rect surface))
        (current-time (sdl-get-ticks))
-       (frame-limiter (make-frame-limiter 60 current-time))
+       (frame-limiter (make-frame-limiter 30 current-time))
        (frame-counter (make-frame-counter current-time))
        (event (make-ftype sdl-event-t))
        (frame-rate 0)
        (pause #f)
-       (life-interval (make-interval 100 current-time
-                                          (lambda ()
-                                            (unless pause
-                                              (set! arena (life-tick arena))))))
-       ;; (life-interval (make-interval-thread 100
-       ;;                                      (lambda ()
-       ;;                                        (unless pause
-       ;;                                          (set! arena (life-tick arena))))))
+       (mtx (make-mutex))
+       (life-action (lambda ()
+                      (let* ((current-time (sdl-get-ticks))
+                             (life-counter (make-frame-counter current-time))
+                             (life-limiter (make-frame-limiter 60 current-time))
+                             (last-rate 0))
+                        (let loop ()
+                          (let* ((current-time (sdl-get-ticks))
+                                 (count (life-counter current-time))
+                                 (delay-time (life-limiter current-time)))
+                            (when (not (fx= last-rate count))
+                              (displayln (format "life: ~a" count))
+                              (set! last-rate count))
+                            (sdl-delay delay-time)
+                            (with-mutex mtx
+                              (if pause
+                                (set! arena (life-tick-pause arena))
+                                (set! arena (life-tick arena)))))
+                          (when running
+                            (loop))))))
+       (life-interval (fork-thread life-action))
        (redisplay-interval (make-interval 100 current-time
                                           (lambda ()
-                                            ;; (with-mutex (cdr life-interval)
-                                            ;;   (arena-render arena surface))
-                                            (arena-render arena surface)
+                                            (with-mutex mtx
+                                              (arena-render arena surface))
                                             (sdl-update-window-surface window)))))
 
   (let loop ()
@@ -323,7 +340,6 @@
           (set! frame-rate new-frame-rate)))
 
       ;; run simulation and redraw
-      (life-interval current-time)
       (redisplay-interval current-time)
 
       (let event-loop ()
@@ -348,11 +364,15 @@
                        (key-code (ftype-ref sdl-keysym-t (sym) keysym)))
                   (cond
                    ((fx= key-code (sdl-keycode 'c))
-                    (arena-clear! arena))
+                    (with-mutex mtx
+                      (arena-clear! arena)))
                    ((fx= key-code (sdl-keycode 'escape))
                     (set! running #f))
+                   ((fx= key-code (sdl-keycode 'f))
+                    (toggle-fullscreen))
                    ((fx= key-code (sdl-keycode 'return))
-                    (arena-randomize! arena))
+                    (with-mutex mtx
+                      (arena-randomize! arena)))
                    ((fx= key-code (sdl-keycode 'space))
                     (set! pause (not pause))
                     (if pause

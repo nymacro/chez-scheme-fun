@@ -322,7 +322,7 @@
                           (when running
                             (loop))))))
        (life-interval (fork-thread life-action))
-       (redisplay-interval (make-interval 100 current-time
+       (redisplay-interval (make-interval 0 current-time
                                           (lambda ()
                                             (with-mutex mtx
                                               (arena-render arena surface))
@@ -357,7 +357,9 @@
                        (block-x (fx/ x block-width))
                        (block-y (fx/ y block-height)))
                   (arena-set! arena block-x block-y
-                              (not (arena-ref arena block-x block-y)))))
+                              (if (life-alive-p (arena-ref arena block-x block-y))
+                                0
+                                255))))
                ((fx= event-type (sdl-event-type 'keydown))
                 (let* ((keyboard-event (ftype-&ref sdl-event-t (key) event))
                        (keysym (ftype-&ref sdl-keyboard-event-t (keysym) keyboard-event))

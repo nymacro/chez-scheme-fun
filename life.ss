@@ -12,7 +12,6 @@
 (import (sdl2))
 (import (sdl2 image))
 (import (chezscheme))
-(import (srfi s48 intermediate-format-strings))
 
 (sdl-library-init)
 (sdl-image-library-init)
@@ -24,17 +23,6 @@
       (when (fx> current-time (fx+ last-time interval))
         (action)
         (set! last-time (fx+ last-time interval))))))
-
-(define (make-interval-thread interval action)
-  (let ((mutex (make-mutex)))
-    (cons (fork-thread
-           (lambda ()
-             (let loop ()
-               (sdl-delay interval)
-               (with-mutex mutex
-                 (action))
-               (loop))))
-          mutex)))
 
 (define displayln
   (case-lambda
@@ -148,14 +136,26 @@
 (define block-width 8)
 (define block-height 8)
 
-(define (draw-block x y surface intensity)
-  (sdl-fill-rect surface (make-temp-rect x y block-width block-height) (sdl-map-rgb (ftype-ref sdl-surface-t (format) surface) intensity 0 0)))
-  
+(define (draw-block x y renderer intensity)
+  (sdl-set-render-draw-color renderer intensity 0 0 255)
+  (sdl-render-fill-rect renderer (make-temp-rect x y block-width block-height)))
+
 (define arena-width (fx/ window-width block-width))
 (define arena-height (fx/ window-height block-height))
 
 (define (make-arena)
   (make-vector (fx* arena-width arena-height) #f))
+
+;; cache of "arenas" to swap between for reuse
+(define (make-arena-buffered)
+  (let ((arenas (list (make-arena) (make-arena)))
+        (index 0))
+    (define (next-arena)
+      (set! index (fxmodulo (fx1+ index) 2))
+      (list-ref arenas index))
+    next-arena))
+
+(define get-next-arena (make-arena-buffered))
 
 (define (arena-idx* x y)
   (let ((xx (if (fx< x 0)
@@ -203,9 +203,9 @@
   (for-arena (x y)
     (arena-set! arena x y #f)))
 
-(define (arena-render arena surface)
+(define (arena-render arena renderer)
   (for-arena (x y)
-    (draw-block (fx* block-width x) (fx* block-height y) surface (arena-ref arena x y)))) 
+    (draw-block (fx* block-width x) (fx* block-height y) renderer (arena-ref arena x y)))) 
 
 (define (arena-display arena)
   (for (y 0 arena-height)
@@ -238,22 +238,14 @@
          (neighbours (arena-surrounds-alive arena x y)))
     (life-tick-state alive neighbours)))
 
-;; (define other-arena (make-arena))
-;; (define-syntax swap!
-;;   (syntax-rules ()
-;;     ((_ a b)
-;;      (let ([c a])
-;;        (set! a b)
-;;        (set! b c)))))
-
 (define (life-tick arena)
-  (let ((new-arena (make-arena)))
+  (let ((new-arena (get-next-arena)))
     (for-arena (x y)
       (arena-set! new-arena x y (life-tick-inner arena x y)))        
     new-arena))
 
 (define (life-tick-pause arena)
-  (let ((new-arena (make-arena)))
+  (let ((new-arena (get-next-arena)))
     (for-arena (x y)
       (let ((alive (arena-ref arena x y)))
         (arena-set! new-arena x y (if (life-alive-p alive)
@@ -283,18 +275,20 @@
           (display ".")))
       (newline))))
 
-(define arena (make-arena))
+(define arena (get-next-arena))
 (arena-randomize! arena)
 
 (let* ((window (sdl-create-window "Game of Life" 0 0 window-width window-height 0))
        (fullscreen #f)
        (toggle-fullscreen (lambda ()
                             (set! fullscreen (not fullscreen))
-                            (sdl-set-window-fullscreen window (if fullscreen 1 0))))
-       (surface (sdl-get-window-surface window))
+                            (sdl-set-window-fullscreen window
+                                                       (if fullscreen
+                                                           (sdl-window-flags 'fullscreen-desktop)
+                                                           0))))
+       (renderer (sdl-create-renderer window -1 (sdl-renderer-flags 'software)))
        (event (make-ftype sdl-event-t))
        (running #t)
-       (surface-rect (get-surface-rect surface))
        (current-time (sdl-get-ticks))
        (frame-limiter (make-frame-limiter 30 current-time))
        (frame-counter (make-frame-counter current-time))
@@ -325,8 +319,11 @@
        (redisplay-interval (make-interval 0 current-time
                                           (lambda ()
                                             (with-mutex mtx
-                                              (arena-render arena surface))
-                                            (sdl-update-window-surface window)))))
+                                              (arena-render arena renderer))
+                                            (sdl-render-present renderer))))
+       (gc-stats-interval (make-interval 5000 current-time
+                                         (lambda ()
+                                           (display-statistics)))))
 
   (let loop ()
     (let* ([current-time (sdl-get-ticks)]
@@ -341,6 +338,7 @@
 
       ;; run simulation and redraw
       (redisplay-interval current-time)
+      (gc-stats-interval current-time)
 
       (let event-loop ()
         (let ((e (sdl-poll-event event)))
@@ -399,4 +397,4 @@
 ;; (sdl-quit)
 
 (displayln "Goodbye :(")
-(exit)
+;(exit)

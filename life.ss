@@ -286,11 +286,11 @@
                                                        (if fullscreen
                                                            (sdl-window-flags 'fullscreen-desktop)
                                                            0))))
-       (renderer (sdl-create-renderer window -1 (sdl-renderer-flags 'software)))
+       (renderer (sdl-create-renderer window -1 (sdl-renderer-flags 'accelerated)))
        (event (make-ftype sdl-event-t))
        (running #t)
        (current-time (sdl-get-ticks))
-       (frame-limiter (make-frame-limiter 30 current-time))
+       (frame-limiter (make-frame-limiter 60 current-time))
        (frame-counter (make-frame-counter current-time))
        (event (make-ftype sdl-event-t))
        (frame-rate 0)
